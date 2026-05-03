@@ -12,6 +12,7 @@ import type {
 import {
   downloadVideo,
   transcribeVideo,
+  diarizeVideo,
   translateVideo,
   synthesizeSpeech,
   stitchVideo,
@@ -21,6 +22,7 @@ import { computeConfigEntries, type ConfigEntry } from "@/lib/config-id";
 const STAGES: PipelineStage[] = [
   "download",
   "transcribe",
+  "diarize",
   "translate",
   "tts",
   "stitch",
@@ -192,6 +194,23 @@ export function usePipeline() {
     try {
       const dl = await run("download", () => downloadVideo(video.url));
       await run("transcribe", () => transcribeVideo(dl.video_id, settings.useYoutubeCaptions));
+
+      // Diarization is only meaningful when the user has opted in via the
+      // settings panel. Otherwise mark the stage as skipped so the row stays
+      // visible but doesn't block the rest of the pipeline.
+      if (settings.diarization.length > 0) {
+        await run("diarize", () => diarizeVideo(dl.video_id));
+      } else {
+        dispatch({ type: "STAGE_ACTIVE", stage: "diarize" });
+        dispatch({
+          type: "STAGE_COMPLETE",
+          stage: "diarize",
+          result: { skipped: true, reason: "diarization disabled in settings" },
+          duration_ms: 0,
+          skipped: true,
+        });
+      }
+
       await run("translate", () => translateVideo(dl.video_id, "es"));
 
       // Run TTS + stitch for each config entry.

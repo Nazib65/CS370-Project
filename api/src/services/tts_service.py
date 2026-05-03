@@ -17,9 +17,29 @@ class TTSService:
         self.ui_dir = ui_dir
         self.tts_engine = tts_engine
 
-    def text_file_to_speech(self, source_path: str, output_path: str, *, alignment: bool | None = None) -> None:
-        """Generate time-aligned TTS audio from a translated JSON transcript."""
-        tts_text_file_to_speech(source_path, output_path, self.tts_engine, alignment=alignment)
+    def text_file_to_speech(
+        self,
+        source_path: str,
+        output_path: str,
+        *,
+        alignment: bool | None = None,
+        speaker_voice_map: dict[str, str] | None = None,
+        default_speaker_wav: str | None = None,
+    ) -> None:
+        """Generate time-aligned TTS audio from a translated JSON transcript.
+
+        ``speaker_voice_map`` maps a diarization speaker label
+        (e.g. ``"SPEAKER_00"``) to a relative WAV path under
+        ``pipeline_data/speakers/`` for Chatterbox voice cloning. When the
+        translated segments carry a ``speaker`` field, each segment uses its
+        speaker's voice; otherwise *default_speaker_wav* is used.
+        """
+        tts_text_file_to_speech(
+            source_path, output_path, self.tts_engine,
+            alignment=alignment,
+            speaker_voice_map=speaker_voice_map,
+            default_speaker_wav=default_speaker_wav,
+        )
 
     @staticmethod
     def title_for_video_id(video_id: str, search_dir: pathlib.Path) -> str | None:

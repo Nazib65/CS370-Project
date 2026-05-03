@@ -51,6 +51,17 @@ class Settings(BaseSettings):
         return self.data_dir / "transcriptions" / self.stt_model_dir
 
     @property
+    def diarizations_dir(self) -> Path:
+        return self.data_dir / "diarizations"
+
+    @property
+    def speakers_dir(self) -> Path:
+        # Speaker reference WAVs live one level up from the per-run pipeline
+        # data so they can be shared across runs and bind-mounted into the
+        # Chatterbox container at /app/voices.
+        return self.base_dir / "pipeline_data" / "speakers"
+
+    @property
     def translations_dir(self) -> Path:
         return self.data_dir / "translations" / self.translation_model_dir
 

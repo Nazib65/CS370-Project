@@ -7,6 +7,8 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+    networks:
+      - fw-net
     volumes:
       - whisper-cache:/home/ubuntu/.cache/huggingface/hub
     environment:
@@ -34,6 +36,8 @@ services:
     shm_size: "8gb"
     ports:
       - "8020:8020"
+    networks:
+      - fw-net
     environment:
       - DEVICE=cuda
       - DEFAULT_MODEL=multilingual
@@ -49,6 +53,25 @@ services:
               count: all
               capabilities: [gpu]
 
+  # ── TTS (Text-to-Speech) — Chatterbox on CPU ──────────────────────
+  chatterbox-cpu:
+    container_name: foreign-whispers-tts
+    profiles: [cpu]
+    image: travisvn/chatterbox-tts-api:latest
+    restart: unless-stopped
+    shm_size: "4gb"
+    ports:
+      - "8020:8020"
+    networks:
+      - fw-net
+    environment:
+      - DEVICE=cpu
+      - DEFAULT_MODEL=multilingual
+      - PORT=8020
+    volumes:
+      - chatterbox-models:/app/models
+      - ./pipeline_data/speakers:/app/voices
+
   # ── API (CPU orchestrator) — all profiles ─────────────────────────
   # The API container is CPU-only. It delegates GPU work to the STT
   # and TTS containers above via HTTP.
@@ -62,16 +85,20 @@ services:
         USER_UID: "${UID:-1000}"
         USER_GID: "${GID:-1000}"
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "8080:8080"
+    networks:
+      - fw-net
     command: ["uv", "run", "uvicorn", "api.src.main:app", "--host", "0.0.0.0", "--port", "8080"]
     environment:
-      - CHATTERBOX_API_URL=http://localhost:8020
+      - CHATTERBOX_API_URL=http://foreign-whispers-tts:8020
+      - FW_CHATTERBOX_API_URL=http://foreign-whispers-tts:8020
       - FW_WHISPER_MODEL=base
+      - FW_HF_TOKEN=${FW_HF_TOKEN:-}
     volumes:
       - ./pipeline_data:/app/pipeline_data
       - ./foreign_whispers:/app/foreign_whispers
       - ./api:/app/api
-      - ./cookies.txt:/app/cookies.txt
 
   # ── Frontend (Next.js) — all profiles ──────────────────────────────
   frontend:
@@ -80,10 +107,15 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        API_URL: http://foreign-whispers-api:8080
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "8501:8501"
+    networks:
+      - fw-net
     environment:
-      - API_URL=http://localhost:8080
+      - API_URL=http://foreign-whispers-api:8080
       - HOSTNAME=0.0.0.0
       - PORT=8501
     healthcheck:
@@ -92,6 +124,10 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+networks:
+  fw-net:
+    driver: bridge
 
 volumes:
   whisper-cache:

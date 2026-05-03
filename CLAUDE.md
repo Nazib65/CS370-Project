@@ -46,11 +46,13 @@ foreign-whispers/
 
 **Always use Docker Compose — never launch with `uvicorn` or `next dev` directly.**
 
-This host has an NVIDIA GPU; always use the `nvidia` profile:
+This host has an AMD GPU (no CUDA); use the `cpu` profile:
 
 ```bash
-docker compose --profile nvidia up -d
+docker compose --profile cpu up -d
 ```
+
+On a machine with an NVIDIA GPU, use `--profile nvidia` instead.
 
 - Frontend (Next.js): <http://localhost:8501>
 - API (FastAPI): <http://localhost:8080>
@@ -60,20 +62,20 @@ docker compose --profile nvidia up -d
 After changing Python source or `video_registry.yml`, rebuild the API image:
 
 ```bash
-docker compose --profile nvidia build api
-docker compose --profile nvidia up -d api
+docker compose --profile cpu build api
+docker compose --profile cpu up -d api
 ```
 
 To stop all services:
 
 ```bash
-docker compose --profile nvidia down
+docker compose --profile cpu down
 ```
 
 To tail logs:
 
 ```bash
-docker compose --profile nvidia logs -f
+docker compose --profile cpu logs -f
 ```
 
 ## Video Registry

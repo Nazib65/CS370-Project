@@ -196,12 +196,25 @@ def files_from_dir(dir_path) -> list:
     return es_files
 
 
-def _synthesize_raw(tts_engine, text: str, wav_path: str) -> bytes | None:
-    """GPU-bound: call TTS engine and return raw WAV bytes, or None on failure."""
+def _synthesize_raw(
+    tts_engine,
+    text: str,
+    wav_path: str,
+    speaker_wav: str | None = None,
+) -> bytes | None:
+    """GPU-bound: call TTS engine and return raw WAV bytes, or None on failure.
+
+    When *speaker_wav* is given (relative path under ``pipeline_data/speakers/``),
+    Chatterbox's voice-cloning endpoint is used; otherwise the engine's
+    configured default voice is applied.
+    """
     if not text or not text.strip():
         return None
     try:
-        tts_engine.tts_to_file(text=text, file_path=wav_path)
+        kwargs = {"text": text, "file_path": wav_path}
+        if speaker_wav:
+            kwargs["speaker_wav"] = speaker_wav
+        tts_engine.tts_to_file(**kwargs)
         return pathlib.Path(wav_path).read_bytes()
     except Exception as exc:
         print(f"[tts] TTS failed for segment ({exc}), using silence")
@@ -395,7 +408,12 @@ def _compute_speech_offset(source_path: str) -> float:
     return yt_start - whisper_start
 
 
-def text_file_to_speech(source_path, output_path, tts_engine=None, *, alignment=None):
+def text_file_to_speech(
+    source_path, output_path, tts_engine=None, *,
+    alignment=None,
+    speaker_voice_map: dict[str, str] | None = None,
+    default_speaker_wav: str | None = None,
+):
     """Read translated JSON with segment timestamps and produce a time-aligned WAV.
 
     Each segment is individually synthesized and time-stretched to match its
@@ -464,6 +482,7 @@ def text_file_to_speech(source_path, output_path, tts_engine=None, *, alignment=
             "target_sec": target_sec,
             "stretch_factor": stretch_factor,
             "aligned_seg": aligned_seg,
+            "speaker": seg.get("speaker"),
         })
 
     # ── Phase 1: GPU synthesis (concurrent) ───────────────────────────
@@ -474,14 +493,23 @@ def text_file_to_speech(source_path, output_path, tts_engine=None, *, alignment=
 
     raw_wav_map: dict[int, bytes | None] = {}
 
+    def _resolve_segment_voice(speaker: str | None) -> str | None:
+        """Pick the speaker_wav for one segment based on the voice map."""
+        if speaker_voice_map and speaker and speaker in speaker_voice_map:
+            return speaker_voice_map[speaker]
+        return default_speaker_wav
+
     with tempfile.TemporaryDirectory() as synth_dir:
-        def _do_synth(idx: int, text: str) -> tuple[int, bytes | None]:
+        def _do_synth(idx: int, text: str, speaker: str | None) -> tuple[int, bytes | None]:
             wav_path = str(pathlib.Path(synth_dir) / f"seg_{idx}.wav")
-            return idx, _synthesize_raw(engine, text, wav_path)
+            return idx, _synthesize_raw(
+                engine, text, wav_path,
+                speaker_wav=_resolve_segment_voice(speaker),
+            )
 
         with ThreadPoolExecutor(max_workers=_TTS_WORKERS) as pool:
             futures = {
-                pool.submit(_do_synth, m["index"], m["text"]): m["index"]
+                pool.submit(_do_synth, m["index"], m["text"], m.get("speaker")): m["index"]
                 for m in seg_metas
             }
             for fut in as_completed(futures):

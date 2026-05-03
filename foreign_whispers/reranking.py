@@ -7,8 +7,117 @@ SegmentMetrics.  The translation re-ranking function is a **student assignment**
 
 import dataclasses
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+
+# Spanish phrase contractions: longer form → shorter equivalent.
+# Each entry preserves meaning while shaving characters.
+_CONTRACTIONS: dict[str, str] = {
+    "en este momento": "ahora",
+    "en estos momentos": "ahora",
+    "en la actualidad": "hoy",
+    "hoy en día": "hoy",
+    "a pesar de que": "aunque",
+    "a pesar de eso": "aún así",
+    "con el fin de": "para",
+    "con el objetivo de": "para",
+    "con el propósito de": "para",
+    "con la intención de": "para",
+    "debido a que": "porque",
+    "puesto que": "porque",
+    "ya que": "porque",
+    "dado que": "porque",
+    "por consiguiente": "así",
+    "por lo tanto": "así",
+    "es decir": "o sea",
+    "sin embargo": "pero",
+    "no obstante": "pero",
+    "a fin de cuentas": "al final",
+    "en el caso de que": "si",
+    "en caso de que": "si",
+    "siempre y cuando": "si",
+    "más o menos": "casi",
+    "una gran cantidad de": "muchos",
+    "un gran número de": "muchos",
+    "la mayor parte de": "la mayoría de",
+    "todos y cada uno": "todos",
+    "tener en cuenta": "considerar",
+    "tomar en consideración": "considerar",
+    "llevar a cabo": "hacer",
+    "darse cuenta de": "ver",
+    "hacer referencia a": "referirse a",
+    "tener la posibilidad de": "poder",
+    "tener la capacidad de": "poder",
+    "estar en condiciones de": "poder",
+    "está claro que": "claramente",
+    "es evidente que": "claramente",
+    "lo que sucede es que": "es que",
+    "lo que pasa es que": "es que",
+    "el día de hoy": "hoy",
+    "de manera que": "así",
+    "de tal manera que": "así",
+    "de forma que": "así",
+}
+
+# Filler / hedging words that can be dropped without losing meaning.
+_FILLERS: list[str] = [
+    "básicamente",
+    "esencialmente",
+    "literalmente",
+    "obviamente",
+    "evidentemente",
+    "francamente",
+    "honestamente",
+    "claramente",
+    "ciertamente",
+    "definitivamente",
+    "en realidad",
+    "de hecho",
+    "por cierto",
+    "a decir verdad",
+    "como sea",
+    "pues bien",
+    "bueno",
+    "este",
+    "o sea",
+]
+
+
+def _apply_contractions(text: str) -> tuple[str, int]:
+    """Replace every long phrase with its shorter equivalent. Case-insensitive
+    match, but the replacement is lowercase. Returns (new_text, n_replacements)."""
+    n = 0
+    out = text
+    for long_form, short_form in _CONTRACTIONS.items():
+        pattern = re.compile(re.escape(long_form), re.IGNORECASE)
+        new_out, count = pattern.subn(short_form, out)
+        if count:
+            out = new_out
+            n += count
+    return out, n
+
+
+def _strip_fillers(text: str) -> tuple[str, int]:
+    """Remove filler/hedge words. Returns (new_text, n_removed)."""
+    n = 0
+    out = text
+    for filler in _FILLERS:
+        # Match the filler as a standalone word with optional surrounding
+        # commas/whitespace, so "básicamente," and " obviamente " both go.
+        pattern = re.compile(
+            r"(?:^|\s|,)\s*" + re.escape(filler) + r"\s*(?:,|\s|$)",
+            re.IGNORECASE,
+        )
+        new_out, count = pattern.subn(" ", out)
+        if count:
+            out = new_out
+            n += count
+    # Collapse multi-spaces and tidy punctuation.
+    out = re.sub(r"\s+", " ", out).strip()
+    out = re.sub(r"\s+([,.;:!?])", r"\1", out)
+    return out, n
 
 
 @dataclasses.dataclass
@@ -157,10 +266,52 @@ def get_shorter_translations(
     Returns:
         Empty list (stub).  Implement to return ``TranslationCandidate`` items.
     """
+    # Character budget: ~15 chars/sec for Spanish TTS.
+    char_budget = max(1, int(target_duration_s * 15))
+
+    candidates: dict[str, str] = {}  # text → rationale, dedup by text
+
+    # Strategy 1: apply phrase contractions only.
+    contracted, n_contractions = _apply_contractions(baseline_es)
+    if n_contractions and contracted != baseline_es:
+        candidates[contracted] = f"contracted {n_contractions} phrase(s)"
+
+    # Strategy 2: strip filler/hedge words only.
+    stripped, n_fillers = _strip_fillers(baseline_es)
+    if n_fillers and stripped != baseline_es:
+        candidates[stripped] = f"removed {n_fillers} filler(s)"
+
+    # Strategy 3: both — contractions then filler removal.
+    if n_contractions or n_fillers:
+        combined, _ = _strip_fillers(contracted)
+        if combined != baseline_es and combined not in candidates:
+            candidates[combined] = (
+                f"contracted {n_contractions} phrase(s), removed {n_fillers} filler(s)"
+            )
+
+    # Keep only candidates that are strictly shorter than the baseline AND
+    # within the character budget. (Even if a candidate exceeds the budget,
+    # it's still useful as a partial improvement — keep it but mark over-budget
+    # ones lower priority by sorting purely on length.)
+    out = [
+        TranslationCandidate(
+            text=text,
+            char_count=len(text),
+            brevity_rationale=rationale,
+        )
+        for text, rationale in candidates.items()
+        if len(text) < len(baseline_es)
+    ]
+
+    # Shortest first.
+    out.sort(key=lambda c: c.char_count)
+
     logger.info(
-        "get_shorter_translations called for %.1fs budget (%d chars baseline) — "
-        "returning empty list (student assignment stub).",
+        "get_shorter_translations: budget=%.1fs (~%d chars), baseline=%d chars, "
+        "produced %d candidate(s).",
         target_duration_s,
+        char_budget,
         len(baseline_es),
+        len(out),
     )
-    return []
+    return out
